@@ -482,6 +482,7 @@ class SQLTransformer(Transformer):
         sel = None
         table = None
         where = None
+        limit = None
         
         print(f"DEBUG select_statement items: {items}")
         
@@ -503,9 +504,21 @@ class SQLTransformer(Transformer):
                 print(f"DEBUG found where_clause tree: {where_content}")
                 if isinstance(where_content, dict):
                     where = where_content
+            # BUSCAR limit_clause
+            elif hasattr(it, 'data') and it.data == 'limit_clause':
+                # _unwrap_tree_token should return the INT inside
+                try:
+                    lim = self._unwrap_tree_token(it)
+                    # lim may be a list or int
+                    if isinstance(lim, list) and lim:
+                        limit = int(lim[0])
+                    else:
+                        limit = int(lim)
+                except Exception:
+                    limit = None
         
         print(f"DEBUG select_statement final: table={table}, where={where}")
-        return ExecutionPlan('SELECT', table_name=table, select_list=sel or ['*'], where_clause=where)
+        return ExecutionPlan('SELECT', table_name=table, select_list=sel or ['*'], where_clause=where, limit=limit)
 
 
 
@@ -539,6 +552,22 @@ class SQLTransformer(Transformer):
             print(f"DEBUG comparison result: {result}")
             return result
         
+        return None
+
+    def fulltext_condition(self, items):
+        """Procesa condición de full-text: field @@ 'query'"""
+        print(f"DEBUG fulltext_condition items: {items}")
+        if len(items) >= 2:
+            field = self._unwrap_tree_token(items[0])
+            # the string literal may be Tree or Token
+            query = self._unwrap_tree_token(items[1])
+            result = {
+                "type": "fulltext",
+                "field": field,
+                "query": query
+            }
+            print(f"DEBUG fulltext_condition result: {result}")
+            return result
         return None
 
     def condition(self, items):

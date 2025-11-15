@@ -575,7 +575,9 @@ class SQLExecutor:
             # Ejecutar WHERE usando índices
             if where_clause:
                 print(f"DEBUG Ejecutando WHERE: {where_clause}")
-                results = self._execute_where_clause(structure, where_clause, index_type)
+                # pasar límite si existe en el plan
+                limit = plan.data.get('limit') if hasattr(plan, 'data') else None
+                results = self._execute_where_clause(structure, where_clause, index_type, limit)
             else:
                 print(f"DEBUG Ejecutando SELECT * sobre {type(structure).__name__}")
                 results = self._select_all(structure, index_type)
@@ -600,10 +602,13 @@ class SQLExecutor:
             traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
-    def _execute_where_clause(self, structure, where_clause, index_type):
-        """Ejecuta cláusula WHERE USANDO los índices para optimizar."""
+    def _execute_where_clause(self, structure, where_clause, index_type, limit=None):
+        """Ejecuta cláusula WHERE USANDO los índices para optimizar.
+
+        Se añadió soporte para condiciones fulltext: {type: 'fulltext', field: ..., query: ...}
+        """
         condition_type = where_clause['type']
-        field = where_clause['field']
+        field = where_clause.get('field')
         
         # BÚSQUEDA POR IGUALDAD - USA EL ÍNDICE
         if condition_type == 'comparison':
@@ -1018,6 +1023,70 @@ class SQLExecutor:
                         results.append(dict(zip(field_names, item)))
                 return results
             else:
+                return []
+        # BÚSQUEDA FULL-TEXT - usar QueryEngine
+        if condition_type == 'fulltext':
+            try:
+                # localizar tabla_name y metadata
+                table_name = None
+                for tbl_name, tbl_info in self.tables.items():
+                    if self.structures.get(tbl_name) == structure:
+                        table_name = tbl_name
+                        table_info = tbl_info
+                        break
+
+                if not table_name:
+                    print("ERROR: No se encontró tabla para la estructura (fulltext)")
+                    return []
+
+                # determinar index dir (si la tabla indicó uno)
+                index_dir = table_info.get('text_index') or table_info.get('index_dir') or 'indexes/text'
+
+                from indexes.query_engine import QueryEngine
+                qe = QueryEngine(index_dir=index_dir)
+
+                k = int(limit) if limit else 10
+                qtext = where_clause.get('query', '')
+                res = qe.query(qtext, k=k)
+                hits = res.get('results', [])
+
+                # mapear doc_ids a filas en el archivo origen
+                source_file = table_info.get('source_file') or table_info.get('source') or f"data/{table_name}.csv"
+                if not os.path.exists(source_file):
+                    print(f"WARN: source file for table {table_name} not found: {source_file}")
+                    # solo devolver ids y scores
+                    return [{ 'id': doc_id, 'score': score } for doc_id, score in hits]
+
+                needed = set([str(doc_id) for doc_id, _ in hits])
+                rows = {}
+                with open(source_file, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        keyval = str(row.get(table_info.get('key_field') or reader.fieldnames[0]))
+                        if keyval in needed:
+                            rows[keyval] = row
+                            if len(rows) >= len(needed):
+                                break
+
+                results = []
+                for doc_id, score in hits:
+                    sid = str(doc_id)
+                    row = rows.get(sid)
+                    if row:
+                        out = dict(row)
+                        out['score'] = float(score)
+                        # add snippet if the fulltext field is present
+                        text_field = field
+                        if text_field and text_field in out:
+                            txt = str(out.get(text_field) or '')
+                            out['snippet'] = (txt[:200] + '...') if len(txt) > 200 else txt
+                        results.append(out)
+                    else:
+                        results.append({'id': sid, 'score': float(score)})
+
+                return results
+            except Exception as e:
+                print(f"ERROR ejecutando fulltext: {e}")
                 return []
         
         return []

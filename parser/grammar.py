@@ -51,6 +51,7 @@ where_clause: "WHERE"i condition
 
 ?condition: comparison 
           | between_condition
+          | fulltext_condition
           | spatial_condition
           | condition ("AND"i | "OR"i) condition
 
@@ -60,6 +61,9 @@ spatial_condition: field_name "IN"i "(" value "," value ")"  // point y radius c
 
 comparison: field_name comparison_operator value
 comparison_operator: "=" | "!=" | "<>" | "<" | ">" | "<=" | ">="
+
+// Full-text operator (SQL-like @@)
+fulltext_condition: field_name "@@" string_literal
 
 // Optional ORDER BY / LIMIT
 order_clause: "ORDER"i "BY"i field_name ("ASC"i | "DESC"i)?
