@@ -177,3 +177,7 @@ cython_debug/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+/indexes/text
+/reports/
+/data/raw/
